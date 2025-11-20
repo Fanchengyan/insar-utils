@@ -9,35 +9,33 @@ Examples
 --------
 Basic usage to create stack variants:
 
-    $ python create_stack_variants.py
+    $ python create_stack_variants.py -s stack_1_4 -v 2,8 3,12 4,16
+
+With custom base and output directories:
+
+    $ python create_stack_variants.py -s stack_1_4 -b /path/to/stacks \\
+        -o /output/path -v 2,8 3,12 4,16
+
+Preview changes without executing (dry-run):
+
+    $ python create_stack_variants.py -s stack_1_4 -v 2,8 3,12 --dry-run
+
+Get help:
+
+    $ python create_stack_variants.py -h
 
 The script will:
 1. Copy config files that use looks parameters (merge, filter, unwrap)
 2. Copy corresponding run scripts (run_14, run_15, run_16)
 3. Update looks parameters (alks, rlks, azimuth_looks, range_looks)
 4. Update output paths to point to new stack
-5. Keep input data references pointing to stack_1_4
-
-Notes
------
-Files copied per variant:
-- config_merge_igram_* (185 files) - multilooking干涉图
-- config_igram_filt_coh_* (185 files) - 滤波和相干性
-- config_igram_unw_* (185 files) - 解缠
-- run_14_merge_burst_igram - 合并脚本
-- run_15_filter_coherence - 滤波脚本
-- run_16_unwrap - 解缠脚本
-- run_pipeline.py - 流水线运行脚本
-
-Total: ~555 small config files + 4 run scripts ≈ 2-5 MB per variant
-
-Author: Generated for InSAR processing workflow
-Date: 2025-11-12
+5. Keep input data references pointing to source stack
 """
 
+import argparse
+import json
 import logging
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -119,7 +117,12 @@ class StackVariantGenerator:
         "run_pipeline.py",  # Pipeline runner script
     ]
 
-    def __init__(self, source_stack: StackName, base_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        source_stack: StackName,
+        base_dir: Path | None = None,
+        resolve_symlinks: bool = False,
+    ) -> None:
         """Initialize the StackVariantGenerator.
 
         Parameters
@@ -128,6 +131,8 @@ class StackVariantGenerator:
             Source stack directory name (e.g., 'stack_1_4')
         base_dir : Path | None, optional
             Base directory containing stacks, by default None
+        resolve_symlinks : bool, optional
+            If True, resolve symbolic links to real paths; if False, preserve symlink paths, by default False
 
         Raises
         ------
@@ -137,6 +142,7 @@ class StackVariantGenerator:
         self.source_stack: StackName = source_stack
         self.base_dir: Path = Path(base_dir) if base_dir else Path.cwd()
         self.source_path: Path = self.base_dir / source_stack
+        self.resolve_symlinks: bool = resolve_symlinks
 
         # Extract source looks from stack name
         parts: list[str] = source_stack.split("_")
@@ -213,14 +219,7 @@ class StackVariantGenerator:
         logger.info("Strategy: Copy only files using looks parameters")
 
         if target_path.exists():
-            logger.warning(f"Target directory already exists: {target_path}")
-            response: str = input(f"Overwrite {target_stack}? (y/n): ")
-            if response.lower() not in ("y", "yes"):
-                logger.info(f"User cancelled overwrite for {target_stack}")
-                return None
-            if not dry_run:
-                logger.info(f"Removing existing directory: {target_path}")
-                shutil.rmtree(target_path)
+            logger.info(f"Target directory already exists: {target_path} - will overwrite files")
 
         if dry_run:
             logger.info("Would create directory structure")
@@ -229,7 +228,7 @@ class StackVariantGenerator:
             logger.info("Would update looks parameters")
             return target_path
 
-        # Create directory structure
+        # Create directory structure (will not fail if exists due to exist_ok=True)
         logger.info(f"Creating directory structure: {target_path}")
         configs_dir: Path = target_path / "configs"
         run_files_dir: Path = target_path / "run_files"
@@ -301,13 +300,17 @@ class StackVariantGenerator:
             logger.error(f"Source configs directory not found: {source_configs_dir}")
             return 0
 
-        # Resolve paths to handle symlinks
-        # Get real path for source (resolves symlinks)
-        source_real_path: str = str(self.source_path.resolve())
+        # Handle path resolution based on resolve_symlinks flag
+        # Get path for source (resolve symlinks or preserve them)
+        if self.resolve_symlinks:
+            source_abs_path: str = str(self.source_path.resolve())
+        else:
+            source_abs_path: str = str(self.source_path.absolute())
+
         # Get target base path for output file replacement
         target_base: str = str(target_path.absolute())
 
-        logger.debug(f"Source real path (resolved): {source_real_path}")
+        logger.debug(f"Source path ({'resolved' if self.resolve_symlinks else 'preserved'}): {source_abs_path}")
         logger.debug(f"Target base path: {target_base}")
         logger.debug(f"Source stack name: {self.source_stack}")
 
@@ -352,41 +355,41 @@ class StackVariantGenerator:
                         content,
                     )
 
-                    # Step 1: Resolve all paths containing source_stack to real paths
-                    # This handles symlinks in source paths (both input and output)
+                    # Step 1: Update all paths containing source_stack
+                    # This handles path resolution based on resolve_symlinks setting
                     # Match: /any/path/stack_1_4/
-                    # Replace with: /real/source/path/
+                    # Replace with: /source/path/ (resolved if flag=True, absolute if flag=False)
                     content = re.sub(
                         rf"[^\s]*/{re.escape(self.source_stack)}/",
-                        f"{source_real_path}/",
+                        f"{source_abs_path}/",
                         content,
                     )
 
                     # Step 2: Update output paths for different file types
-                    # Replace source_real_path with target_base for output fields only
+                    # Replace source_abs_path with target_base for output fields only
                     if "config_igram_unw_" in source_file.name:
                         # For unwrap: only update unw: output path
                         content = re.sub(
-                            rf"(unw\s*:\s*){re.escape(source_real_path)}",
+                            rf"(unw\s*:\s*){re.escape(source_abs_path)}",
                             rf"\1{target_base}",
                             content,
                         )
                     elif "config_merge_igram_" in source_file.name:
                         # For merge: update outfile path
                         content = re.sub(
-                            rf"(outfile\s*:\s*){re.escape(source_real_path)}",
+                            rf"(outfile\s*:\s*){re.escape(source_abs_path)}",
                             rf"\1{target_base}",
                             content,
                         )
                     elif "config_igram_filt_coh_" in source_file.name:
                         # For filter: update filt and coh output paths
                         content = re.sub(
-                            rf"(filt\s*:\s*){re.escape(source_real_path)}",
+                            rf"(filt\s*:\s*){re.escape(source_abs_path)}",
                             rf"\1{target_base}",
                             content,
                         )
                         content = re.sub(
-                            rf"(coh\s*:\s*){re.escape(source_real_path)}",
+                            rf"(coh\s*:\s*){re.escape(source_abs_path)}",
                             rf"\1{target_base}",
                             content,
                         )
@@ -440,8 +443,12 @@ class StackVariantGenerator:
             logger.error(f"Source run_files directory not found: {source_run_dir}")
             return 0
 
-        # Resolve paths to handle symlinks
-        source_real_path: str = str(self.source_path.resolve())
+        # Handle path resolution based on resolve_symlinks flag
+        if self.resolve_symlinks:
+            source_abs_path: str = str(self.source_path.resolve())
+        else:
+            source_abs_path: str = str(self.source_path.absolute())
+
         target_base: str = str(target_path.absolute())
 
         copied_count: int = 0
@@ -459,19 +466,19 @@ class StackVariantGenerator:
                 with open(source_script, "r", encoding="utf-8") as f:
                     content: str = f.read()
 
-                # Step 1: Resolve all paths containing source_stack to real paths
-                # This handles symlinks
+                # Step 1: Update all paths containing source_stack
+                # This handles path resolution based on resolve_symlinks setting
                 content = re.sub(
                     rf"[^\s]*/{re.escape(self.source_stack)}/",
-                    f"{source_real_path}/",
+                    f"{source_abs_path}/",
                     content,
                 )
 
                 # Step 2: Replace config paths to point to target
-                # Match: /real/source/path/configs/...
+                # Match: /source/path/configs/...
                 # Replace with: /target/base/path/configs/...
                 content = re.sub(
-                    rf"{re.escape(source_real_path)}/configs/",
+                    rf"{re.escape(source_abs_path)}/configs/",
                     f"{target_base}/configs/",
                     content,
                 )
@@ -555,60 +562,277 @@ class StackVariantGenerator:
         return created_stacks
 
 
+def parse_variants(variant_strings: list[str]) -> list[VariantTuple]:
+    """Parse variant strings into tuples.
+
+    Parameters
+    ----------
+    variant_strings : list[str]
+        List of variant strings like ['2,8', '3,12', '4,16']
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        List of (alks, rlks) tuples
+
+    Raises
+    ------
+    ValueError
+        If variant format is invalid
+
+    Examples
+    --------
+    >>> parse_variants(['2,8', '3,12'])
+    [(2, 8), (3, 12)]
+    """
+    variants: list[VariantTuple] = []
+    for v in variant_strings:
+        try:
+            parts = v.split(',')
+            if len(parts) != 2:
+                raise ValueError(f"Expected format 'alks,rlks', got: {v}")
+            alks, rlks = int(parts[0]), int(parts[1])
+            variants.append((alks, rlks))
+        except (ValueError, AttributeError) as e:
+            raise ValueError(
+                f"Invalid variant format: {v}. Expected: alks,rlks (e.g., 2,8)"
+            ) from e
+    return variants
+
+
+def load_config_file(config_path: Path) -> dict:
+    """Load variants from a JSON configuration file.
+
+    Parameters
+    ----------
+    config_path : Path
+        Path to JSON configuration file
+
+    Returns
+    -------
+    dict
+        Configuration dictionary with 'variants', 'source_stack', etc.
+
+    Examples
+    --------
+    Config file format (variants.json):
+    {
+        "source_stack": "stack_1_4",
+        "base_dir": "/path/to/stacks",
+        "output_dir": "/output/path",
+        "variants": [
+            [2, 8],
+            [3, 12],
+            [4, 16]
+        ]
+    }
+    """
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        logger.info(f"Loaded configuration from: {config_path}")
+        return config
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        logger.error(f"Failed to load config file: {e}")
+        raise
+
+
 def main() -> int:
-    """Execute the main script workflow.
+    """Command line interface for creating InSAR stack variants.
 
     Returns
     -------
     int
         Exit code (0 for success, 1 for error)
 
-    Notes
-    -----
-    The workflow consists of:
-    1. Initialize generator with source stack
-    2. Display variants to be created
-    3. Perform dry run preview
-    4. Ask user for confirmation
-    5. Create actual variants if confirmed
-
     Examples
     --------
     Run from command line:
 
-        $ python create_stack_variants.py
+        $ python create_stack_variants.py -s stack_1_4 -v 2,8 3,12 4,16
+        $ python create_stack_variants.py -s stack_1_4 -v 2,8 3,12 --dry-run
+        $ python create_stack_variants.py -c config.json
     """
-    # Configuration
-    source_stack: StackName = "stack_1_4"
+    parser = argparse.ArgumentParser(
+        description='Create minimal InSAR stack variants for multilooking experiments',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Create variants with default settings
+  %(prog)s -s stack_1_4 -v 2,8 3,12 4,16
 
-    # Define variants to create: (azimuth_looks, range_looks)
-    variants: list[VariantTuple] = [
-        (2, 8),  # stack_2_8
-        (3, 12),  # stack_3_12
-        (4, 16),
-        (5, 20),
-        (6, 24),
-        (7, 28),
-        (8, 32),
-        (9, 36),
-        (10, 40),
-    ]
+  # Specify custom directories
+  %(prog)s -s stack_1_4 -b /path/to/stacks -o /output/path -v 2,8 3,12
+
+  # Preview without executing
+  %(prog)s -s stack_1_4 -v 2,8 3,12 --dry-run
+
+  # Use configuration file
+  %(prog)s -c variants.json
+
+  # With custom log level
+  %(prog)s -s stack_1_4 -v 2,8 3,12 --log-level DEBUG
+
+Variant Format:
+  Each variant is specified as 'alks,rlks' where:
+    alks = azimuth looks (integer)
+    rlks = range looks (integer)
+  Example: 2,8 creates stack_2_8 with alks=2, rlks=8
+
+Config File Format (JSON):
+  {
+    "source_stack": "stack_1_4",
+    "base_dir": "/path/to/stacks",
+    "output_dir": "/output/path",
+    "variants": [[2, 8], [3, 12], [4, 16]]
+  }
+
+What Gets Copied:
+  - config_merge_igram_* files (merge with multilooking)
+  - config_igram_filt_coh_* files (filtering and coherence)
+  - config_igram_unw_* files (unwrapping)
+  - run_14, run_15, run_16, run_pipeline.py (run scripts)
+
+  All other files remain in the source stack (~2-5 MB vs ~100 GB)
+        """
+    )
+
+    # Source stack configuration
+    parser.add_argument(
+        '-s', '--source-stack',
+        type=str,
+        help='Source stack directory name (e.g., stack_1_4). Required unless using -c/--config-file.'
+    )
+
+    parser.add_argument(
+        '-b', '--base-dir',
+        type=Path,
+        help='Base directory containing stacks (default: current directory)'
+    )
+
+    parser.add_argument(
+        '-o', '--output-dir',
+        type=Path,
+        help='Output directory for variants (default: same as base-dir)'
+    )
+
+    # Variant specification
+    parser.add_argument(
+        '-v', '--variants',
+        nargs='+',
+        metavar='ALKS,RLKS',
+        help='Variant specifications as alks,rlks pairs (e.g., 2,8 3,12 4,16). Required unless using -c/--config-file.'
+    )
+
+    # Configuration file
+    parser.add_argument(
+        '-c', '--config-file',
+        type=Path,
+        help='JSON config file with variant specifications (alternative to -s and -v)'
+    )
+
+    # Execution options
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Show what would be done without executing'
+    )
+
+    parser.add_argument(
+        '--log-level',
+        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        default='INFO',
+        help='Logging level (default: INFO)'
+    )
+
+    parser.add_argument(
+        '--resolve-symlinks',
+        action='store_true',
+        help='Resolve symbolic links to real paths instead of preserving symlink paths'
+    )
+
+    args = parser.parse_args()
+
+    # Configure logging level
+    log_level = getattr(logging, args.log_level)
+    logging.getLogger().setLevel(log_level)
+
+    # Parse configuration
+    source_stack: str | None = None
+    base_dir: Path | None = None
+    output_dir: Path | None = None
+    variants: list[VariantTuple] = []
+
+    if args.config_file:
+        # Load from config file
+        try:
+            config = load_config_file(args.config_file)
+            source_stack = config.get('source_stack')
+            base_dir = Path(config['base_dir']) if 'base_dir' in config else None
+            output_dir = Path(config['output_dir']) if 'output_dir' in config else None
+
+            # Parse variants from config
+            variant_list = config.get('variants', [])
+            for v in variant_list:
+                if isinstance(v, list) and len(v) == 2:
+                    variants.append((int(v[0]), int(v[1])))
+                else:
+                    logger.error(f"Invalid variant format in config: {v}")
+                    return 1
+
+        except Exception as e:
+            logger.error(f"Failed to load configuration file: {e}")
+            return 1
+    else:
+        # Use command-line arguments
+        if not args.source_stack:
+            parser.error("--source-stack is required when not using --config-file")
+        if not args.variants:
+            parser.error("--variants is required when not using --config-file")
+
+        source_stack = args.source_stack
+        base_dir = args.base_dir
+        output_dir = args.output_dir
+
+        try:
+            variants = parse_variants(args.variants)
+        except ValueError as e:
+            logger.error(f"Invalid variant specification: {e}")
+            return 1
+
+    # Validate required parameters
+    if not source_stack:
+        logger.error("source_stack not specified")
+        return 1
+    if not variants:
+        logger.error("No variants specified")
+        return 1
 
     # Initialize generator
     try:
-        generator: StackVariantGenerator = StackVariantGenerator(source_stack)
+        generator = StackVariantGenerator(
+            source_stack,
+            base_dir=base_dir,
+            resolve_symlinks=args.resolve_symlinks
+        )
     except ValueError as e:
         logger.error(f"Failed to initialize generator: {e}")
         return 1
 
     # Display information
-    logger.info(
-        "This script will create minimal stack variants for multilooking experiments:"
-    )
+    logger.info("=" * 70)
+    logger.info("InSAR Stack Multilooking Variants Generator")
+    logger.info("=" * 70)
+    logger.info(f"Source stack: {source_stack}")
+    logger.info(f"Base directory: {generator.base_dir}")
+    logger.info(f"Output directory: {output_dir if output_dir else generator.base_dir}")
+    logger.info(f"Resolve symlinks: {args.resolve_symlinks}")
+    logger.info(f"Dry run: {args.dry_run}")
+    logger.info("=" * 70)
+    logger.info("Variants to create:")
     for alks, rlks in variants:
         logger.info(f"  - stack_{alks}_{rlks} (alks={alks}, rlks={rlks})")
-    logger.info(f"Source: {source_stack}")
-    logger.info(f"Base directory: {generator.base_dir}")
+    logger.info("=" * 70)
     logger.info("What will be copied:")
     logger.info("  config_merge_igram_* files")
     logger.info("  config_igram_filt_coh_* files")
@@ -622,17 +846,27 @@ def main() -> int:
     logger.info("  - All other run files")
     logger.info("  - All data directories (interferograms, SLC, etc.)")
     logger.info("Disk usage: ~2-5 MB per variant (vs ~100 GB for full copy)")
+    logger.info("=" * 70)
 
     # Create variants
-    generator.create_multiple_variants(
-        variants, output_dir="/home/fancy/workspace/cryo_data/UCM", dry_run=False
-    )
-    logger.info("All operations completed successfully!")
-    logger.info("To run processing for a variant:")
-    logger.info("  cd stack_2_8")
-    logger.info("  bash run_files/run_14_merge_burst_igram    # Merge with new looks")
-    logger.info("  bash run_files/run_15_filter_coherence     # Filter with new looks")
-    logger.info("  bash run_files/run_16_unwrap               # Unwrap with new looks")
+    try:
+        generator.create_multiple_variants(
+            variants,
+            output_dir=output_dir,
+            dry_run=args.dry_run
+        )
+    except Exception as e:
+        logger.error(f"Failed to create variants: {e}")
+        return 1
+
+    if not args.dry_run:
+        logger.info("All operations completed successfully!")
+        logger.info("To run processing for a variant:")
+        logger.info(f"  cd stack_{variants[0][0]}_{variants[0][1]}")
+        logger.info("  bash run_files/run_14_merge_burst_igram    # Merge with new looks")
+        logger.info("  bash run_files/run_15_filter_coherence     # Filter with new looks")
+        logger.info("  bash run_files/run_16_unwrap               # Unwrap with new looks")
+
     return 0
 
 

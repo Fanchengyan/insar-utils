@@ -20,7 +20,7 @@ from stdproc.rectify.geocode.Geocodable import Geocodable
 from zerodop.geozero import createGeozero
 
 # Import topsStack utilities
-sys.path.append('/DATA/DATA5/fancy/github/isce2/contrib/stack/topsStack')
+# sys.path.append('/DATA/DATA5/fancy/github/isce2/contrib/stack/topsStack')
 import s1a_isce_utils as ut
 from baselineGrid import getMergedOrbit
 
@@ -90,6 +90,7 @@ class GeocodeTopsStack:
         range_looks: int,
         azimuth_looks: int,
         bbox: list[float] | None = None,
+        resolve_symlinks: bool = False,
     ) -> None:
         """
         Initialize GeocodeTopsStack.
@@ -106,13 +107,22 @@ class GeocodeTopsStack:
             Number of azimuth looks
         bbox : list[float] | None, optional
             Bounding box [South, North, West, East], by default None
+        resolve_symlinks : bool, optional
+            If True, resolve symbolic links to real paths; if False, preserve symlink paths, by default False
 
         Raises
         ------
         ValueError
             If workspace or DEM validation fails
         """
-        self.stack_dir = Path(stack_workspace).resolve()
+        self.resolve_symlinks = resolve_symlinks
+
+        # Handle path resolution based on resolve_symlinks flag
+        if resolve_symlinks:
+            self.stack_dir = Path(stack_workspace).resolve()
+        else:
+            self.stack_dir = Path(stack_workspace).absolute()
+
         self.reference_dir = self.stack_dir / "reference"
         self.secondary_base_dir = self.stack_dir / "coreg_secondarys"
         self.merged_dir = self.stack_dir / "merged" / "interferograms"
@@ -347,7 +357,11 @@ class GeocodeTopsStack:
             files = []
             for pattern in file_patterns:
                 matched_files = list(pair_dir.glob(pattern))
-                files.extend([str(f.resolve()) for f in matched_files if f.is_file()])
+                # Handle symlink resolution based on configuration
+                if self.resolve_symlinks:
+                    files.extend([str(f.resolve()) for f in matched_files if f.is_file()])
+                else:
+                    files.extend([str(f.absolute()) for f in matched_files if f.is_file()])
 
             if files:
                 result[pair_name] = sorted(files)
@@ -737,6 +751,11 @@ Examples:
         action='store_true',
         help='Print summary and exit without geocoding',
     )
+    parser.add_argument(
+        '--resolve-symlinks',
+        action='store_true',
+        help='Resolve symbolic links to real paths instead of preserving symlink paths',
+    )
 
     args = parser.parse_args()
 
@@ -748,6 +767,7 @@ Examples:
             range_looks=args.range_looks,
             azimuth_looks=args.azimuth_looks,
             bbox=args.bbox,
+            resolve_symlinks=args.resolve_symlinks,
         )
     except ValueError as e:
         logger.error(f"Initialization failed: {e}")

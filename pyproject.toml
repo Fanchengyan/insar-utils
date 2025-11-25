@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "rasterio>=1.4.3",
     "snaphu>=0.4.1",
     "tqdm>=4.67.1",
     "typing-extensions>=4.15.0",

@@ -10,7 +10,7 @@ This provides optimal performance for large batches of interferograms.
 Usage
 -----
     # Manual resource allocation
-    python parallel_unwrap_hybrid.py -f unw_cmd -n 2 --nproc 8 --ntiles 4 4 --tile_overlap 100
+    python snaphu_parallel.py -f unw_cmd -n 2 --nproc 4 --ntiles 4 4 --tile_overlap 100
 """
 
 import argparse
@@ -24,8 +24,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-
-import snaphu_unwrap
+from . import snaphu_unwrap
 
 
 def setup_logging(log_file: str | None = None) -> logging.Logger:
@@ -415,19 +414,19 @@ def main() -> None:
         epilog="""
 Examples:
   # Auto resource allocation (recommended)
-  python parallel_unwrap_hybrid.py -f unw_cmd -n 4 --nproc 4 --ntiles 4 4
+  python snaphu_parallel.py -f unw_cmd -n 4 --nproc 4 --ntiles 4 4
   
   # Maximize outer parallelism (many small tasks)
-  python parallel_unwrap_hybrid.py -f unw_cmd -n 8 --nproc 2
+  python snaphu_parallel.py -f unw_cmd -n 8 --nproc 2
   
   # Maximize inner parallelism (few large tasks)
-  python parallel_unwrap_hybrid.py -f unw_cmd -n 2 --nproc 8 --ntiles 4 4
+  python snaphu_parallel.py -f unw_cmd -n 2 --nproc 8 --ntiles 4 4
   
   # Full auto mode (auto-calculate both -n and --nproc)
-  python parallel_unwrap_hybrid.py -f unw_cmd --auto
+  python snaphu_parallel.py -f unw_cmd --auto
   
   # With custom log file
-  python parallel_unwrap_hybrid.py -f unw_cmd -n 4 --nproc 4 -o custom.log
+  python snaphu_parallel.py -f unw_cmd -n 4 --nproc 4 -o custom.log
 
 Resource Allocation Strategy:
   Total cores used = outer_workers (-n) × nproc (--nproc)

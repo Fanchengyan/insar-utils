@@ -230,7 +230,7 @@ def unwrap_from_config(
         conncomp = snaphu.io.Raster.create(
             conncomp_path,
             like=corr,
-            dtype="u1",
+            dtype="i4",
             driver=driver
         )
         

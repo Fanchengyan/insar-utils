@@ -258,8 +258,8 @@ def unwrap_from_config(
             driver=driver
         )
         
-        # Create connected components file (same directory as unw)
-        conncomp_path = str(Path(unw_path).parent / "conncomp")
+        # Create connected components file (named as unw_path + '.conncomp')
+        conncomp_path = str(unw_path) + '.conncomp'
         conncomp = snaphu.io.Raster.create(
             conncomp_path,
             like=corr,
@@ -316,17 +316,18 @@ def unwrap_from_config(
         
         # Check output file size
         output_size = Path(unw_path).stat().st_size
-        if output_size < 1024:  # Less than 1KB
-            result['message'] = f'Output file too small ({output_size} bytes)'
+        output_size_mb = output_size / (1024 * 1024)  # Convert to MB
+        if output_size_mb < 1.0:  # Less than 1MB
+            result['message'] = f'Output file too small ({output_size_mb:.3f} MB < 1.0 MB)'
             result['error'] = result['message']
             logger.warning(result['message'])
             return result
-        
+
         # Success
         result['success'] = True
         result['message'] = 'Unwrapping completed successfully'
         result['output'] = unw_path
-        logger.info(f"Successfully unwrapped: {unw_path} ({output_size} bytes)")
+        logger.info(f"Successfully unwrapped: {unw_path} ({output_size_mb:.2f} MB)")
         
     except Exception as e:
         result['message'] = f'Exception during unwrapping: {str(e)}'
@@ -393,15 +394,32 @@ def batch_unwrap(
             config_info = parse_config(config_path)
             if config_info:
                 unw_path = config_info.get('unw', '')
-                if unw_path and Path(unw_path).exists():
+                if unw_path and isinstance(unw_path, str) and Path(unw_path).exists():
                     file_size = Path(unw_path).stat().st_size
-                    if file_size >= 1024:  # At least 1KB
+                    file_size_mb = file_size / (1024 * 1024)  # Convert to MB
+
+                    if file_size_mb >= 1.0:  # At least 1MB
                         stats['skipped'] += 1
                         logger.info(
                             f"[{i}/{stats['total']}] SKIP: {config_name} "
-                            f"(output exists, {file_size} bytes)"
+                            f"(output exists, {file_size_mb:.2f} MB)"
                         )
                         continue
+                    else:
+                        # File is too small, delete and regenerate
+                        logger.warning(
+                            f"[{i}/{stats['total']}] DELETE: {config_name} - file too small "
+                            f"({file_size_mb:.3f} MB < 1.0 MB), will regenerate"
+                        )
+                        try:
+                            Path(unw_path).unlink()
+                            # Also delete corresponding conncomp file if exists
+                            conncomp_path = str(unw_path) + '.conncomp'
+                            if Path(conncomp_path).exists():
+                                Path(conncomp_path).unlink()
+                                logger.info(f"Deleted associated conncomp file: {conncomp_path}")
+                        except Exception as e:
+                            logger.error(f"Failed to delete {unw_path}: {e}")
         
         # Execute unwrapping
         logger.info(f"[{i}/{stats['total']}] Processing: {config_name}")

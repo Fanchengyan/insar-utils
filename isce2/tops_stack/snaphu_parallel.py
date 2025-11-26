@@ -9,8 +9,24 @@ This provides optimal performance for large batches of interferograms.
 
 Usage
 -----
-    # Manual resource allocation
-    python snaphu_parallel.py -f unw_cmd -n 2 --nproc 4 --ntiles 4 4 --tile_overlap 100
+    # Basic usage with manual resource allocation
+    python snaphu_parallel.py -f unw_cmd -n 2 --nproc 4 --ntiles 4 4 --tile-overlap 100
+
+    # Using advanced SNAPHU parameters
+    python snaphu_parallel.py -f unw_cmd -n 2 --nproc 4 \\
+        --init mcf \\
+        --min-region-size 200 \\
+        --tile-cost-thresh 600 \\
+        --phase-grad-window 9 9 \\
+        --min-conncomp-frac 0.02
+
+    # Debugging mode (preserve scratch files)
+    python snaphu_parallel.py -f unw_cmd -n 2 --nproc 4 \\
+        --scratchdir /path/to/scratch \\
+        --no-delete-scratch
+
+    # Full auto mode with custom initialization
+    python snaphu_parallel.py -f unw_cmd --auto --init mst
 """
 
 import argparse
@@ -121,12 +137,21 @@ def execute_task_wrapper(
     config_path: str,
     nproc: int,
     ntiles: tuple[int, int] | None,
-    tile_overlap: int
+    tile_overlap: int,
+    init: str = "mcf",
+    min_region_size: int = 100,
+    tile_cost_thresh: int = 500,
+    phase_grad_window: tuple[int, int] = (7, 7),
+    min_conncomp_frac: float = 0.01,
+    single_tile_reoptimize: bool = True,
+    regrow_conncomps: bool = True,
+    scratchdir: str | None = None,
+    delete_scratch: bool = True
 ) -> dict[str, str | bool]:
     """Wrapper function for executing unwrap task in parallel.
-    
+
     This function is designed to be called by ProcessPoolExecutor.
-    
+
     Parameters
     ----------
     config_path : str
@@ -137,12 +162,30 @@ def execute_task_wrapper(
         Tile grid dimensions (rows, cols).
     tile_overlap : int
         Tile overlap in pixels.
-        
+    init : str, default="mcf"
+        Initialization method: 'mst' or 'mcf'.
+    min_region_size : int, default=100
+        Minimum size of a region to be unwrapped separately.
+    tile_cost_thresh : int, default=500
+        Cost threshold for region boundaries.
+    phase_grad_window : tuple[int, int], default=(7, 7)
+        Sliding window size for phase gradients.
+    min_conncomp_frac : float, default=0.01
+        Minimum connected component fraction.
+    single_tile_reoptimize : bool, default=True
+        Re-optimize with single tile after tiled unwrapping.
+    regrow_conncomps : bool, default=True
+        Regrow connected components after tiled unwrapping.
+    scratchdir : str | None, optional
+        Directory for scratch files.
+    delete_scratch : bool, default=True
+        Delete scratch directory after unwrapping.
+
     Returns
     -------
     dict[str, str | bool]
         Dictionary with execution results.
-        
+
     Notes
     -----
     This function creates its own logger to avoid issues with
@@ -158,6 +201,15 @@ def execute_task_wrapper(
             nproc=nproc,
             ntiles=ntiles,
             tile_overlap=tile_overlap,
+            init=init,
+            min_region_size=min_region_size,
+            tile_cost_thresh=tile_cost_thresh,
+            phase_grad_window=phase_grad_window,
+            min_conncomp_frac=min_conncomp_frac,
+            single_tile_reoptimize=single_tile_reoptimize,
+            regrow_conncomps=regrow_conncomps,
+            scratchdir=scratchdir,
+            delete_scratch=delete_scratch,
             logger=logger
         )
         return result
@@ -247,11 +299,20 @@ def run_hybrid_parallel(
     nproc: int,
     ntiles: tuple[int, int] | None = None,
     tile_overlap: int = 50,
+    init: str = "mcf",
+    min_region_size: int = 100,
+    tile_cost_thresh: int = 500,
+    phase_grad_window: tuple[int, int] = (7, 7),
+    min_conncomp_frac: float = 0.01,
+    single_tile_reoptimize: bool = True,
+    regrow_conncomps: bool = True,
+    scratchdir: str | None = None,
+    delete_scratch: bool = True,
     skip_existing: bool = True,
     logger: logging.Logger | None = None
 ) -> dict[str, int]:
     """Execute tasks using hybrid parallelism.
-    
+
     Parameters
     ----------
     tasks : list[str]
@@ -264,11 +325,29 @@ def run_hybrid_parallel(
         Tile grid dimensions (rows, cols).
     tile_overlap : int, default=50
         Tile overlap in pixels.
+    init : str, default="mcf"
+        Initialization method: 'mst' or 'mcf'.
+    min_region_size : int, default=100
+        Minimum size of a region to be unwrapped separately.
+    tile_cost_thresh : int, default=500
+        Cost threshold for region boundaries.
+    phase_grad_window : tuple[int, int], default=(7, 7)
+        Sliding window size for phase gradients.
+    min_conncomp_frac : float, default=0.01
+        Minimum connected component fraction.
+    single_tile_reoptimize : bool, default=True
+        Re-optimize with single tile after tiled unwrapping.
+    regrow_conncomps : bool, default=True
+        Regrow connected components after tiled unwrapping.
+    scratchdir : str | None, optional
+        Directory for scratch files.
+    delete_scratch : bool, default=True
+        Delete scratch directory after unwrapping.
     skip_existing : bool, default=True
         Whether to skip tasks with existing output.
     logger : logging.Logger | None, optional
         Logger instance. If None, uses default logger.
-        
+
     Returns
     -------
     dict[str, int]
@@ -277,7 +356,7 @@ def run_hybrid_parallel(
         - skipped: Number of skipped tasks
         - completed: Number of successfully completed tasks
         - failed: Number of failed tasks
-        
+
     Notes
     -----
     This function implements two-level parallelism:
@@ -349,7 +428,16 @@ def run_hybrid_parallel(
                 task,
                 nproc,
                 ntiles,
-                tile_overlap
+                tile_overlap,
+                init,
+                min_region_size,
+                tile_cost_thresh,
+                phase_grad_window,
+                min_conncomp_frac,
+                single_tile_reoptimize,
+                regrow_conncomps,
+                scratchdir,
+                delete_scratch
             ): task
             for task in tasks_to_run
         }
@@ -415,28 +503,60 @@ def main() -> None:
 Examples:
   # Auto resource allocation (recommended)
   python snaphu_parallel.py -f unw_cmd -n 4 --nproc 4 --ntiles 4 4
-  
+
   # Maximize outer parallelism (many small tasks)
   python snaphu_parallel.py -f unw_cmd -n 8 --nproc 2
-  
+
   # Maximize inner parallelism (few large tasks)
   python snaphu_parallel.py -f unw_cmd -n 2 --nproc 8 --ntiles 4 4
-  
+
   # Full auto mode (auto-calculate both -n and --nproc)
   python snaphu_parallel.py -f unw_cmd --auto
-  
+
+  # Advanced SNAPHU parameters
+  python snaphu_parallel.py -f unw_cmd -n 4 --nproc 4 \\
+      --init mcf --min-region-size 200 --tile-cost-thresh 600 \\
+      --phase-grad-window 9 9 --min-conncomp-frac 0.02
+
+  # Debugging mode (preserve scratch files)
+  python snaphu_parallel.py -f unw_cmd -n 2 --nproc 4 \\
+      --scratchdir /tmp/snaphu_debug --no-delete-scratch
+
   # With custom log file
   python snaphu_parallel.py -f unw_cmd -n 4 --nproc 4 -o custom.log
 
 Resource Allocation Strategy:
   Total cores used = outer_workers (-n) × nproc (--nproc)
-  
+
   Recommendations:
   - 8 cores total:  -n 2 --nproc 4  or  -n 4 --nproc 2 --ntiles 4 4
   - 16 cores total: -n 4 --nproc 4  or  -n 8 --nproc 2
   - 32 cores total: -n 8 --nproc 4  or  -n 4 --nproc 8
-  
+
   Use --auto to let the script decide based on number of tasks.
+
+Advanced SNAPHU Parameters:
+  --init: Choose initialization algorithm (mst or mcf)
+    - mcf (default): Minimum Cost Flow, slower but more accurate
+    - mst: Minimum Spanning Tree, faster but less accurate
+
+  --min-region-size: Minimum region size in pixels (default: 100)
+    Increase for noisier data to merge small regions
+
+  --tile-cost-thresh: Cost threshold for region boundaries (default: 500)
+    Higher values create larger regions, lower values more regions
+
+  --phase-grad-window: Window size for phase gradient estimation (default: 7 7)
+    Larger windows smooth gradients but reduce spatial resolution
+
+  --min-conncomp-frac: Minimum connected component fraction (default: 0.01)
+    Components smaller than this fraction are filtered out
+
+  --scratchdir: Specify custom scratch directory for intermediate files
+    Useful for debugging or when default temp space is limited
+
+  --no-delete-scratch: Preserve scratch files after processing
+    Essential for debugging unwrapping issues
         """
     )
     
@@ -482,6 +602,62 @@ Resource Allocation Strategy:
         default=50,
         help='Tile overlap in pixels (default: 50)'
     )
+
+    # SNAPHU unwrapping algorithm arguments
+    parser.add_argument(
+        '--init',
+        type=str,
+        choices=['mst', 'mcf'],
+        default='mcf',
+        help='Initialization method: mst (Minimum Spanning Tree) or mcf (Minimum Cost Flow). default: mcf'
+    )
+    parser.add_argument(
+        '--min-region-size',
+        type=int,
+        default=100,
+        help='Minimum size (in pixels) of a region to be unwrapped separately (default: 100)'
+    )
+    parser.add_argument(
+        '--tile-cost-thresh',
+        type=int,
+        default=500,
+        help='Cost threshold for determining region boundaries in tiled unwrapping (default: 500)'
+    )
+    parser.add_argument(
+        '--phase-grad-window',
+        type=int,
+        nargs=2,
+        default=(7, 7),
+        metavar=('ROWS', 'COLS'),
+        help='Sliding window size for computing phase gradients (default: 7 7)'
+    )
+    parser.add_argument(
+        '--min-conncomp-frac',
+        type=float,
+        default=0.01,
+        help='Minimum fraction of pixels for a connected component to be retained (default: 0.01)'
+    )
+    parser.add_argument(
+        '--no-single-tile-reoptimize',
+        action='store_true',
+        help='Disable re-optimization with single tile after tiled unwrapping (enabled by default)'
+    )
+    parser.add_argument(
+        '--no-regrow-conncomps',
+        action='store_true',
+        help='Disable regrowing connected components after tiled unwrapping (enabled by default)'
+    )
+    parser.add_argument(
+        '--scratchdir',
+        type=str,
+        default=None,
+        help='Directory for storing intermediate scratch files (default: auto-generated temp directory)'
+    )
+    parser.add_argument(
+        '--no-delete-scratch',
+        action='store_true',
+        help='Preserve scratch directory after unwrapping for debugging (deleted by default)'
+    )
     
     # Other arguments
     parser.add_argument(
@@ -517,6 +693,17 @@ Resource Allocation Strategy:
     ntiles = tuple(args.ntiles)
     if ntiles[0] < 1 or ntiles[1] < 1:
         logger.error("Invalid ntiles: both dimensions must be >= 1")
+        sys.exit(1)
+
+    # Validate phase_grad_window if provided
+    phase_grad_window = tuple(args.phase_grad_window)
+    if phase_grad_window[0] < 1 or phase_grad_window[1] < 1:
+        logger.error("Invalid phase_grad_window: both dimensions must be >= 1")
+        sys.exit(1)
+
+    # Validate min_conncomp_frac range
+    if not 0.0 <= args.min_conncomp_frac <= 1.0:
+        logger.error("Invalid min_conncomp_frac: must be between 0.0 and 1.0")
         sys.exit(1)
 
     # Load tasks
@@ -571,6 +758,15 @@ Resource Allocation Strategy:
         nproc=nproc,
         ntiles=ntiles,
         tile_overlap=args.tile_overlap,
+        init=args.init,
+        min_region_size=args.min_region_size,
+        tile_cost_thresh=args.tile_cost_thresh,
+        phase_grad_window=phase_grad_window,
+        min_conncomp_frac=args.min_conncomp_frac,
+        single_tile_reoptimize=not args.no_single_tile_reoptimize,
+        regrow_conncomps=not args.no_regrow_conncomps,
+        scratchdir=args.scratchdir,
+        delete_scratch=not args.no_delete_scratch,
         skip_existing=skip_existing,
         logger=logger
     )

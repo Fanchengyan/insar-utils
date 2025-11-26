@@ -111,11 +111,20 @@ def unwrap_from_config(
     ntiles: tuple[int, int] | None = None,
     tile_overlap: int = 0,
     nlooks: float | None = None,
-    cost: Literal["smooth", "defo", "p-norm"] = "defo",
+    cost: Literal["smooth", "defo"] = "defo",
+    init: Literal["mst", "mcf"] = "mcf",
+    min_region_size: int = 100,
+    tile_cost_thresh: int = 500,
+    phase_grad_window: tuple[int, int] = (7, 7),
+    min_conncomp_frac: float = 0.01,
+    single_tile_reoptimize: bool = True,
+    regrow_conncomps: bool = True,
+    scratchdir: str | None = None,
+    delete_scratch: bool = True,
     logger: logging.Logger | None = None
 ) -> dict[str, str | bool]:
     """Execute SNAPHU unwrapping from configuration file.
-    
+
     Parameters
     ----------
     config_path : str
@@ -128,8 +137,32 @@ def unwrap_from_config(
         Tile overlap in pixels.
     nlooks : float | None, optional
         Equivalent number of looks. If None, calculated from config rlks/alks.
-    cost : Literal["smooth", "defo", "p-norm"], default="smooth"
+    cost : Literal["smooth", "defo", "p-norm"], default="defo"
         Cost function to use for unwrapping.
+    init : Literal["mst", "mcf"], default="mcf"
+        Initialization method for unwrapping algorithm.
+        'mst' = Minimum Spanning Tree, 'mcf' = Minimum Cost Flow.
+    min_region_size : int, default=100
+        Minimum size (in pixels) of a region to be unwrapped separately.
+    tile_cost_thresh : int, default=500
+        Cost threshold for determining region boundaries in tiled unwrapping.
+    phase_grad_window : tuple[int, int], default=(7, 7)
+        Sliding window size (rows, cols) for computing phase gradients.
+    min_conncomp_frac : float, default=0.01
+        Minimum fraction of pixels that a connected component must contain
+        to be retained in the output (range: 0.0 to 1.0).
+    single_tile_reoptimize : bool, default=True
+        If True, re-optimize the solution using a single tile after
+        completing tiled unwrapping. Improves quality but increases runtime.
+    regrow_conncomps : bool, default=True
+        If True, regrow connected components after tiled unwrapping
+        to merge components split by tile boundaries.
+    scratchdir : str | None, optional
+        Directory for storing intermediate scratch files. If None,
+        a temporary directory is automatically created.
+    delete_scratch : bool, default=True
+        If True, delete the scratch directory and its contents after unwrapping.
+        Set to False for debugging or to preserve intermediate results.
     logger : logging.Logger | None, optional
         Logger instance. If None, uses default logger.
         
@@ -242,8 +275,20 @@ def unwrap_from_config(
             'unw': unw,
             'conncomp': conncomp,
             'nproc': nproc,
-            'cost': cost
+            'cost': cost,
+            'init': init,
+            'min_region_size': min_region_size,
+            'tile_cost_thresh': tile_cost_thresh,
+            'phase_grad_window': phase_grad_window,
+            'min_conncomp_frac': min_conncomp_frac,
+            'single_tile_reoptimize': single_tile_reoptimize,
+            'regrow_conncomps': regrow_conncomps,
+            'delete_scratch': delete_scratch
         }
+
+        # Add scratchdir if specified
+        if scratchdir is not None:
+            unwrap_params['scratchdir'] = scratchdir
         
         # Add tiling parameters if specified
         if ntiles is not None:

@@ -95,6 +95,7 @@ def filter_run_file(
     threshold_days: int,
     operator_str: str = "le",
     output_file: Path | None = None,
+    jobs: int | None = None,
 ) -> list[str]:
     """Filter run file by temporal baseline.
 
@@ -108,6 +109,8 @@ def filter_run_file(
         Comparison operator ('lt', 'le', 'eq', 'ne', 'ge', 'gt'), default 'le'.
     output_file : Path | None, optional
         Path to the output file. If None, auto-generated.
+    jobs : int | None, optional
+        Number of parallel jobs. If None, serial execution.
 
     Returns
     -------
@@ -178,8 +181,22 @@ def filter_run_file(
 
     # Write filtered lines
     with output_file.open("w", encoding="utf-8") as f:
-        for line in filtered_lines:
-            f.write(line + "\n")
+        if jobs is None:
+            # Serial execution (default)
+            for line in filtered_lines:
+                f.write(line + "\n")
+        else:
+            # Parallel execution
+            count = 0
+            for line in filtered_lines:
+                f.write(line + " &\n")
+                count += 1
+                if count % jobs == 0:
+                    f.write("wait\n")
+            
+            # Add final wait if needed (if not already added by modulo check)
+            if filtered_lines and count % jobs != 0:
+                f.write("wait\n")
 
     logger.info("Total pairs found: %d", len(filtered_lines))
     logger.info("Output written to: %s", output_file)
@@ -232,6 +249,13 @@ Examples:
         help="Output file path (default: <input_file>_<op>_<days>days)",
     )
     parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=None,
+        help="Number of parallel jobs (default: serial)",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -244,7 +268,7 @@ Examples:
         logging.getLogger().setLevel(logging.DEBUG)
 
     try:
-        filter_run_file(args.input_file, args.days, args.operator, args.output)
+        filter_run_file(args.input_file, args.days, args.operator, args.output, args.jobs)
     except FileNotFoundError:
         sys.exit(1)
     except Exception as e:

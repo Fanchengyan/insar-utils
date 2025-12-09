@@ -170,11 +170,11 @@ def filter_run_file(
     # Determine output file path
     if output_file is None:
         # Create output directory: <operator>_<days>
-        output_dir = input_file.parent / f"{operator_str}{threshold_days}"
+        output_dir = input_file.parent / f"{operator_str}_{threshold_days}_days"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Output file inside the directory with same name as input
-        output_file = output_dir / input_file.name
+        output_file = output_dir / f"{input_file.name}_{operator_str}_{threshold_days}_days"
 
     # Write filtered lines
     with output_file.open("w", encoding="utf-8") as f:

@@ -11,6 +11,7 @@ import argparse
 import logging
 import re
 import sys
+import operator
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +23,16 @@ logger = logging.getLogger(__name__)
 
 # Pattern to match date pairs like 20220103_20220115
 DATE_PAIR_PATTERN = re.compile(r"(\d{8})_(\d{8})")
+
+# Map operator strings to functions
+OPERATORS = {
+    "lt": operator.lt,
+    "le": operator.le,
+    "eq": operator.eq,
+    "ne": operator.ne,
+    "ge": operator.ge,
+    "gt": operator.gt,
+}
 
 
 def parse_date(date_str: str) -> datetime:
@@ -81,7 +92,8 @@ def extract_date_pair(line: str) -> tuple[str, str] | None:
 
 def filter_run_file(
     input_file: Path,
-    max_days: int,
+    threshold_days: int,
+    operator_str: str = "le",
     output_file: Path | None = None,
 ) -> list[str]:
     """Filter run file by temporal baseline.
@@ -90,8 +102,10 @@ def filter_run_file(
     ----------
     input_file : Path
         Path to the input run file.
-    max_days : int
-        Maximum temporal baseline in days.
+    threshold_days : int
+        Temporal baseline threshold in days.
+    operator_str : str, optional
+        Comparison operator ('lt', 'le', 'eq', 'ne', 'ge', 'gt'), default 'le'.
     output_file : Path | None, optional
         Path to the output file. If None, auto-generated.
 
@@ -104,6 +118,10 @@ def filter_run_file(
         logger.error("Input file does not exist: %s", input_file)
         raise FileNotFoundError(f"Input file does not exist: {input_file}")
 
+    if operator_str not in OPERATORS:
+        raise ValueError(f"Invalid operator: {operator_str}")
+
+    op_func = OPERATORS[operator_str]
     filtered_lines: list[str] = []
 
     with input_file.open("r", encoding="utf-8") as f:
@@ -123,7 +141,7 @@ def filter_run_file(
             date1, date2 = date_pair
             temporal_baseline = calculate_temporal_baseline(date1, date2)
 
-            if temporal_baseline <= max_days:
+            if op_func(temporal_baseline, threshold_days):
                 # Remove trailing ' &' if present
                 line = line.rstrip()
                 if line.endswith(" &"):
@@ -132,23 +150,28 @@ def filter_run_file(
                     line = line[:-1].rstrip()
                 filtered_lines.append(line)
                 logger.debug(
-                    "Included: %s_%s (baseline: %d days)",
+                    "Included: %s_%s (baseline: %d days, op: %s %d)",
                     date1,
                     date2,
                     temporal_baseline,
+                    operator_str,
+                    threshold_days,
                 )
             else:
                 logger.debug(
-                    "Excluded: %s_%s (baseline: %d days > %d)",
+                    "Excluded: %s_%s (baseline: %d days, op: %s %d)",
                     date1,
                     date2,
                     temporal_baseline,
-                    max_days,
+                    operator_str,
+                    threshold_days,
                 )
 
     # Determine output file path
     if output_file is None:
-        output_file = input_file.parent / f"{input_file.name}_{max_days}days"
+        output_file = (
+            input_file.parent / f"{input_file.name}_{operator_str}_{threshold_days}days"
+        )
 
     # Write filtered lines
     with output_file.open("w", encoding="utf-8") as f:
@@ -168,11 +191,14 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Filter pairs with temporal baseline <= 24 days
-    python filter_pairs_by_days.py /path/to/.run_16_unwrap -d 24
+    # Filter pairs with temporal baseline <= 24 days (default)
+    python filter_pairs_by_days.py run_file -d 24
 
-    # Filter pairs with temporal baseline <= 48 days and specify output
-    python filter_pairs_by_days.py /path/to/.run_16_unwrap -d 48 -o output_file
+    # Filter pairs with temporal baseline > 24 days
+    python filter_pairs_by_days.py run_file -d 24 --operator gt
+
+    # Filter pairs with temporal baseline == 12 days
+    python filter_pairs_by_days.py run_file -d 12 --op eq
         """,
     )
     parser.add_argument(
@@ -185,14 +211,22 @@ Examples:
         "--days",
         type=int,
         required=True,
-        help="Maximum temporal baseline in days",
+        help="Temporal baseline threshold in days",
+    )
+    parser.add_argument(
+        "--op",
+        "--operator",
+        dest="operator",
+        choices=["lt", "le", "eq", "ne", "ge", "gt"],
+        default="le",
+        help="Comparison operator (default: le)",
     )
     parser.add_argument(
         "-o",
         "--output",
         type=Path,
         default=None,
-        help="Output file path (default: <input_file>_<days>days)",
+        help="Output file path (default: <input_file>_<op>_<days>days)",
     )
     parser.add_argument(
         "-v",
@@ -207,7 +241,7 @@ Examples:
         logging.getLogger().setLevel(logging.DEBUG)
 
     try:
-        filter_run_file(args.input_file, args.days, args.output)
+        filter_run_file(args.input_file, args.days, args.operator, args.output)
     except FileNotFoundError:
         sys.exit(1)
     except Exception as e:
